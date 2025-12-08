@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  # 1. SERVIÇO DE BANCO DE DADOS (DB)
+  db:
+    image: mysql:5.7
+    container_name: toshiro-db
+    restart: unless-stopped
+    environment:
+      # Variáveis de ambiente que o MySQL espera para inicialização
+      MYSQL_ROOT_PASSWORD: Senha123
+      MYSQL_DATABASE: meubanco
+    # Carrega o schema do banco de dados na inicialização do container
+    volumes:
+      - ./banco.sql:/docker-entrypoint-initdb.d/init.sql
+    expose:
+      - "3306" # Expõe a porta internamente para o serviço PHP
+
+  # 2. MICROSSERVIÇO DA APLICAÇÃO (PHP-APP)
+  php-app:
+    # Constrói a imagem a partir do Dockerfile que você criou na pasta 'app/'
+    build: 
+      context: ./app
+      dockerfile: Dockerfile
+    # CRUCIAL: Variáveis que o index.php (refatorado) lê via getenv()
+    environment:
+      # O DB_HOST 'db' resolve para o container do banco de dados (Service Discovery)
+      DB_HOST: db 
+      DB_USER: root
+      DB_PASSWORD: Senha123
+      DB_NAME: meubanco
+    # CRUCIAL: Define múltiplas réplicas para demonstrar escalabilidade (Boas Práticas)
+    deploy:
+      replicas: 3
+      restart_policy:
+        condition: on-failure
+    depends_on:
+      - db
+    expose:
+      - "80" # Porta que o Nginx usará para se comunicar
+
+  # 3. SERVIÇO GATEWAY/LOAD BALANCER (NGINX)
+  gateway:
+    # Constrói a imagem a partir do Dockerfile na raiz (que usa o nginx.conf corrigido)
+    build: . 
+    restart: unless-stopped
+    ports:
+      - "4500:4500" # Expõe o Gateway publicamente para acesso via localhost:4500
+    depends_on:
+      - php-app
