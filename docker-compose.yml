@@ -1,50 +1,79 @@
 version: '3.8'
 
 services:
-  # 1. SERVIÇO DE BANCO DE DADOS (DB)
+  # 1. SERVIÇO DE BANCO DE DADOS (PostgreSQL)
   db:
-    image: mysql:5.7
+    image: postgres:15-alpine
     container_name: toshiro-db
     restart: unless-stopped
     environment:
-      # Variáveis de ambiente que o MySQL espera para inicialização
-      MYSQL_ROOT_PASSWORD: Senha123
-      MYSQL_DATABASE: meubanco
-    # Carrega o schema do banco de dados na inicialização do container
+      POSTGRES_USER: root
+      POSTGRES_PASSWORD: Senha123
+      POSTGRES_DB: meubanco
     volumes:
-      - ./banco.sql:/docker-entrypoint-initdb.d/init.sql
+      # Renomeado para banco.sql para compatibilidade com o PostgreSQL
+      - ./banco.sql:/docker-entrypoint-initdb.d/banco.sql
     expose:
-      - "3306" # Expõe a porta internamente para o serviço PHP
+      - "5432"
+    
+    # Healthcheck Estável para PostgreSQL
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U root -d meubanco"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
-  # 2. MICROSSERVIÇO DA APLICAÇÃO (PHP-APP)
-  php-app:
-    # Constrói a imagem a partir do Dockerfile que você criou na pasta 'app/'
-    build: 
-      context: ./app
-      dockerfile: Dockerfile
-    # CRUCIAL: Variáveis que o index.php (refatorado) lê via getenv()
+  # 2. MICROSSERVIÇOS DA APLICAÇÃO (PHP - 3 Réplicas)
+  # O 'build: .' usa o Dockerfile no diretório atual para instalar as extensões.
+  php1:
+    # 💥 MUDANÇA: Usa o Dockerfile local para instalar o driver pgsql
+    build: . 
+    container_name: php1
+    volumes:
+      - ./index.php:/var/www/html/index.php
     environment:
-      # O DB_HOST 'db' resolve para o container do banco de dados (Service Discovery)
-      DB_HOST: db 
-      DB_USER: root
-      DB_PASSWORD: Senha123
-      DB_NAME: meubanco
-    # CRUCIAL: Define múltiplas réplicas para demonstrar escalabilidade (Boas Práticas)
-    deploy:
-      replicas: 3
-      restart_policy:
-        condition: on-failure
+      DB_HOST: db
+      DB_PORT: 5432
     depends_on:
-      - db
-    expose:
-      - "80" # Porta que o Nginx usará para se comunicar
+      db:
+        condition: service_healthy
+
+  php2:
+    # 💥 MUDANÇA: Usa o Dockerfile local
+    build: .
+    container_name: php2
+    volumes:
+      - ./index.php:/var/www/html/index.php
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+    depends_on:
+      db:
+        condition: service_healthy
+
+  php3:
+    # 💥 MUDANÇA: Usa o Dockerfile local
+    build: .
+    container_name: php3
+    volumes:
+      - ./index.php:/var/www/html/index.php
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+    depends_on:
+      db:
+        condition: service_healthy
 
   # 3. SERVIÇO GATEWAY/LOAD BALANCER (NGINX)
-  gateway:
-    # Constrói a imagem a partir do Dockerfile na raiz (que usa o nginx.conf corrigido)
-    build: . 
+  nginx-lb:
+    image: nginx:latest
+    container_name: nginx-lb
     restart: unless-stopped
     ports:
-      - "4500:4500" # Expõe o Gateway publicamente para acesso via localhost:4500
+      - "4500:4500"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
-      - php-app
+      - php1
+      - php2
+      - php3
